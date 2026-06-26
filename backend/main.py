@@ -49,7 +49,7 @@ def _require_admin_key(req: Request) -> None:
     if token != config.ADMIN_KEY and key != config.ADMIN_KEY:
         raise HTTPException(status_code=401, detail="Invalid admin key")
 
-def _require_api_key(req: Request) -> None:
+def _require_api_key(req: Request, model: str) -> None:
     auth = req.headers.get("authorization", "")
     token = auth.removeprefix("Bearer ").strip() if auth.lower().startswith("bearer ") else ""
     key = req.headers.get("x-api-key", "").strip()
@@ -58,9 +58,69 @@ def _require_api_key(req: Request) -> None:
     if not client_key:
         raise HTTPException(status_code=401, detail="Missing API key")
         
-    is_valid, reason = auth_db.validate_and_track_usage(client_key)
+    is_valid, reason = auth_db.validate_and_track_usage(client_key, model)
     if not is_valid:
         raise HTTPException(status_code=401, detail=reason)
+
+def _get_user_from_req(req: Request) -> str:
+    auth = req.headers.get("authorization", "")
+    token = auth.removeprefix("Bearer ").strip() if auth.lower().startswith("bearer ") else ""
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing session token")
+    username = auth_db.get_user_from_token(token)
+    if not username:
+        raise HTTPException(status_code=401, detail="Invalid session token")
+    return username
+
+from pydantic import BaseModel
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+    email: str | None = None
+
+@app.post("/auth/register")
+async def register(req: RegisterRequest):
+    success, token_or_err = auth_db.register_user(req.username, req.password, req.email)
+    if not success:
+        raise HTTPException(status_code=400, detail=token_or_err)
+    return {"token": token_or_err, "username": req.username}
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+@app.post("/auth/login")
+async def login(req: LoginRequest):
+    success, token_or_err = auth_db.login_user(req.username, req.password)
+    if not success:
+        raise HTTPException(status_code=401, detail=token_or_err)
+    return {"token": token_or_err, "username": req.username}
+
+class UserKeyRequest(BaseModel):
+    rpm_limit: int = 60
+    expires_in_days: int | None = None
+    allowed_models: str | None = None
+
+@app.post("/user/keys")
+async def create_user_key(req: UserKeyRequest, request: Request):
+    username = _get_user_from_req(request)
+    key_info = auth_db.create_or_update_user_key(username, req.rpm_limit, req.expires_in_days, req.allowed_models)
+    return {"message": "Key created or updated successfully", "key": key_info}
+
+@app.get("/user/keys")
+async def get_user_keys(request: Request):
+    username = _get_user_from_req(request)
+    key = auth_db.get_user_key(username)
+    return {"key": key}
+
+@app.post("/user/keys/reset")
+async def reset_user_key(request: Request):
+    username = _get_user_from_req(request)
+    key = auth_db.get_user_key(username)
+    if not key:
+        raise HTTPException(status_code=404, detail="No key found")
+    auth_db.reset_limit(key["key"])
+    return {"message": "Rate limit reset successfully"}
 
 
 @app.on_event("startup")
@@ -97,7 +157,7 @@ async def admin_create_key(req: Request):
     body = await req.json()
     
     # Generate a random key if none provided
-    key_str = body.get("key") or f"leech-{uuid.uuid4().hex[:16]}"
+    key_str = body.get("key") or f"sk-{uuid.uuid4().hex[:32]}"
     name = body.get("name")
     expires_in_days = body.get("expires_in_days")
     rpm_limit = body.get("rpm_limit")
@@ -122,6 +182,26 @@ async def admin_delete_key(key: str, req: Request):
         return {"message": "Key deleted"}
     raise HTTPException(status_code=404, detail="Key not found")
 
+
+@app.post("/admin/keys/{key}/reset")
+async def admin_reset_key_limit(key: str, req: Request):
+    _require_admin_key(req)
+    if auth_db.reset_limit(key):
+        return {"message": "Rate limit reset successfully"}
+    # Even if rowcount was 0 (no usage yet), we can just return success
+    return {"message": "Rate limit reset successfully"}
+
+@app.get("/admin/users")
+async def admin_get_users(req: Request):
+    _require_admin_key(req)
+    return {"users": auth_db.get_all_users()}
+
+@app.delete("/admin/users/{username}")
+async def admin_delete_user(username: str, req: Request):
+    _require_admin_key(req)
+    if auth_db.delete_user(username):
+        return {"message": "User and associated data deleted"}
+    raise HTTPException(status_code=404, detail="User not found")
 
 
 # --- status ------------------------------------------------------------------
@@ -174,10 +254,10 @@ def _sse(token: str) -> str:
 
 @app.post("/chat")
 async def chat(req: Request):
-    _require_api_key(req)
     body = await req.json()
-    message = body.get("message", "")
     model = body.get("model", "default")
+    _require_api_key(req, model)
+    message = body.get("message", "")
     session_id = body.get("sessionId") or str(uuid.uuid4())
 
     messages = context.build_messages(session_id, message)   # role-tagged history + new turn
@@ -203,9 +283,9 @@ async def chat(req: Request):
 # --- stateless: simple -------------------------------------------------------
 @app.post("/v1/chat")
 async def v1_chat(req: Request):
-    _require_api_key(req)
     body = await req.json()
     model = body.get("model", "default")
+    _require_api_key(req, model)
     reply = await run_guarded(lambda: run_messages(model, body.get("messages", [])))
     return JSONResponse({
         "model": model,
@@ -230,9 +310,9 @@ def _openai_block(reply: str, model: str) -> dict:
 
 @app.post("/v1/chat/completions")
 async def openai_completions(req: Request):
-    _require_api_key(req)
     body = await req.json()
     model = body.get("model", "default")
+    _require_api_key(req, model)
     stream = bool(body.get("stream", False))
     msgs = body.get("messages", [])
 
