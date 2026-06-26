@@ -95,6 +95,41 @@ def login_user(username: str, password: str) -> tuple[bool, str]:
         finally:
             c.close()
 
+def login_or_register_google_user(email: str, name: str) -> tuple[bool, str, str]:
+    with _lock:
+        c = _open()
+        try:
+            # Check if user with this email exists
+            row = c.execute("SELECT username FROM users WHERE email=?", (email,)).fetchone()
+            
+            username = ""
+            if row:
+                username = row["username"]
+            else:
+                # Fallback: check if they registered manually using their email as username
+                row2 = c.execute("SELECT username FROM users WHERE username=?", (email,)).fetchone()
+                if row2:
+                    username = email
+                    # Update their email field just in case
+                    c.execute("UPDATE users SET email=? WHERE username=?", (email, username))
+                else:
+                    # Register new user
+                    username = email
+                    now = time.time()
+                    c.execute("INSERT INTO users(username, email, password_hash, session_token, created_at) VALUES(?,?,?,?,?)", 
+                              (username, email, "", "", now))
+            
+            # Generate new session token
+            token = secrets.token_hex(32)
+            c.execute("UPDATE users SET session_token=? WHERE username=?", (token, username))
+            c.commit()
+            
+            return True, token, username
+        except Exception as e:
+            return False, str(e), ""
+        finally:
+            c.close()
+
 def get_user_from_token(token: str) -> str | None:
     with _lock:
         c = _open()

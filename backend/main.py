@@ -85,6 +85,30 @@ async def register(req: RegisterRequest):
         raise HTTPException(status_code=400, detail=token_or_err)
     return {"token": token_or_err, "username": req.username}
 
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
+
+class GoogleAuthRequest(BaseModel):
+    credential: str
+
+@app.post("/auth/google")
+async def google_auth(req: GoogleAuthRequest):
+    try:
+        idinfo = id_token.verify_oauth2_token(req.credential, google_requests.Request())
+        email = idinfo.get("email")
+        name = idinfo.get("name", "")
+        
+        if not email:
+            raise HTTPException(status_code=400, detail="Google account has no email")
+            
+        success, token, username = auth_db.login_or_register_google_user(email, name)
+        if not success:
+            raise HTTPException(status_code=500, detail=token)
+            
+        return {"token": token, "username": username}
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid Google token")
+
 class LoginRequest(BaseModel):
     username: str
     password: str
