@@ -3,3 +3,5 @@ uvicorn[standard]>=0.29
 httpx[socks]>=0.27
 websockets>=13.0
 bcrypt
+google-auth>=2.29
+requests>=2.31
