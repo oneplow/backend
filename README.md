@@ -1,4 +1,4 @@
-# leech
+# easy-ai
 
 A zero-cost AI relay. Disposable accounts on `use.ai` (no email verification)
 each give one free prompt; we harvest them in bulk, bank the token + session,
@@ -26,11 +26,11 @@ stocked with `BANK_MIN_FRESH` ready accounts.
 
 ## Layout
 ```
-leech/
+easy-ai/
   worker/
     config.py     # ALL knobs: selectors, auth/token, direct-API, bank (edit me)
     email_gen.py  # throwaway format-valid emails
-    leech.py      # run_prompt(): DIRECT / WARM / COLD path selection
+    easy_ai.py    # run_prompt(): DIRECT / WARM / COLD path selection
     bank.py       # sqlite pool of harvested accounts (atomic claim)
     harvester.py  # background signup -> bank token + session
     direct.py     # HTTP fast path against use.ai's own endpoint
@@ -44,7 +44,7 @@ leech/
 
 ## Setup
 ```bash
-cd leech
+cd easy-ai
 python -m venv .venv && source .venv/bin/activate   # win: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
@@ -77,7 +77,7 @@ uvicorn backend.main:app --reload --port 8000   # → http://localhost:8000
 ### Windows quick start
 
 ```powershell
-Set-Location C:\path\to\leech
+Set-Location C:\path\to\easy-ai
 .\.venv\Scripts\Activate.ps1
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
@@ -111,14 +111,14 @@ print(client.chat.completions.create(
 
 ## Free proxies (no paid account)
 **Option A — Tor (free rotation, pre-wired for this machine):**
-1. From the `leech\` folder, double-click **`start_tor.bat`** (or run it in a
+1. From the `easy-ai\` folder, double-click **`start_tor.bat`** (or run it in a
    terminal). It launches the `tor.exe` bundled in your Tor Browser as a plain
    proxy — SOCKS 9050, control 9051, cookie auth — no browser needed. Wait for
    `Bootstrapped 100% (done)` and leave that window open.
 2. That's it — `config.py` already has `PROXY_TOR = True`. The harvester pulls a
    fresh exit IP before each signup (spaced by `TOR_NEWNYM_DELAY`).
 
-   > Run `start_tor.bat` and `uvicorn` both from `leech\` so the auth cookie in
+   > Run `start_tor.bat` and `uvicorn` both from `easy-ai\` so the auth cookie in
    > `tor_data\` is found. Some sites block known Tor exit IPs — if use.ai does,
    > switch to option B.
 
@@ -134,8 +134,8 @@ in `config.py`. Free proxies die fast — re-run this periodically (e.g. cron).
 
 ## Docker
 ```bash
-docker build -t leech .
-docker run -p 8000:8000 leech
+docker build -t easy-ai .
+docker run -p 8000:8000 easy-ai
 ```
 
 ## Gotchas

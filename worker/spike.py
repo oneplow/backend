@@ -1,5 +1,5 @@
 """
-Phase-1 tooling. Run from the leech/ root.
+Phase-1 tooling. Run from the easy-ai/ root.
 
   python -m worker.spike "prompt"            full flow, headed, prints reply
   python -m worker.spike --sniff "prompt"    same, but logs every xhr/fetch +
@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 
 
 async def _run(prompt: str):
-    from .leech import run_prompt
+    from .easy_ai import run_prompt
     config.HEADLESS = False
     print(f"\n--- spiking {config.TARGET_URL} ---")
     reply = await run_prompt(model="default", prompt=prompt)
@@ -26,7 +26,7 @@ async def _run(prompt: str):
 
 async def _sniff(prompt: str):
     """Walk the cold flow with network logging so you can map the real API."""
-    from .leech import async_playwright, _new_context, _switch_model, _signup, _ask
+    from .easy_ai import async_playwright, _new_context, _switch_model, _signup, _ask
     config.HEADLESS = False
 
     def on_req(r):

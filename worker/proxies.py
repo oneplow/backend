@@ -116,7 +116,7 @@ def renew_tor_circuit() -> bool:
         s.close()
         return ok
     except FileNotFoundError:
-        log.warning("tor auth cookie not found -- did you run start_tor.bat from leech/?")
+        log.warning("tor auth cookie not found -- did you run start_tor.bat from easy-ai/?")
         return False
     except Exception as e:
         log.warning("tor circuit renew failed: %s (is the tor daemon running?)", e)

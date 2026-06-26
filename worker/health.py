@@ -108,7 +108,7 @@ class Health:
 
         if config.PROXY_TOR and self.counters["tor_renew_fail"] and not self.counters["tor_renew_ok"]:
             status = "critical"
-            reasons.append("Tor control unreachable -> is start_tor.bat running in leech/ ?")
+            reasons.append("Tor control unreachable -> is start_tor.bat running in easy-ai/ ?")
 
         if fresh == 0:
             if self.counters["harvest_fail"] > self.counters["harvest_ok"]:

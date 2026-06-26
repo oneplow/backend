@@ -5,7 +5,7 @@ Free proxies are mostly dead, slow, or honeypots -- so we pull thousands from
 public lists, TEST every one against a live endpoint, and keep only the working
 ones. The survivors are written to PROXY_FILE for the worker to rotate through.
 
-Run it (from the leech/ root):
+Run it (from the easy-ai/ root):
     python -m worker.proxy_sources              # refresh the live list
     python -m worker.proxy_sources 500          # only test the first 500 candidates
 

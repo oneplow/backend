@@ -2,8 +2,8 @@
 REM ============================================================
 REM  Starts the Tor daemon bundled with Tor Browser as a plain
 REM  proxy (no browser needed). SOCKS on 9050, control on 9051
-REM  with cookie auth. Leave this window OPEN while you run leech.
-REM  Run this from the leech\ folder so tor_data lands beside it.
+REM  with cookie auth. Leave this window OPEN while you run easy-ai.
+REM  Run this from the easy-ai\ folder so tor_data lands beside it.
 REM ============================================================
 
 set "TOR_EXE=C:\Users\Emir\Desktop\Tor Browser\Browser\TorBrowser\Tor\tor.exe"

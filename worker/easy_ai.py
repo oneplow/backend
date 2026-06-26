@@ -1,5 +1,5 @@
 """
-The leech worker. run_prompt(model, prompt) -> str is the only thing the
+The easy-ai worker. run_prompt(model, prompt) -> str is the only thing the
 backend calls. Three paths, fastest first:
 
   1. DIRECT  -> claim a banked token, replay use.ai's API over HTTP (no browser)
@@ -15,7 +15,7 @@ import logging
 from . import config
 from .email_gen import gen_email, gen_password
 
-log = logging.getLogger("leech")
+log = logging.getLogger("easy-ai")
 
 # --- cloakbrowser launch -----------------------------------------------------
 # cloakbrowser is a drop-in Playwright replacement; the ONLY difference from

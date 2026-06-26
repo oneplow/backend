@@ -1,10 +1,10 @@
 """
-Central config for the leech worker.
+Central config for the easy-ai worker.
 
 EVERYTHING site-specific lives here. When use.ai changes its UI, you fix it
 in ONE place. The two things you MUST verify against the live site:
   1. The SELECTORS dict  -> open the site, inspect, paste real CSS selectors.
-  2. The cloakbrowser launch call in leech.py (_new_context).
+  2. The cloakbrowser launch call in easy_ai.py (_new_context).
 """
 
 import os

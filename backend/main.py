@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from worker import auth_db, bank, config, health
 from worker.harvester import top_up
-from worker.leech import run_messages, stream_messages
+from worker.easy_ai import run_messages, stream_messages
 from . import context
 from .pool import run_guarded, run_guarded_gen
 

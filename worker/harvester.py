@@ -10,7 +10,7 @@ import os
 import uuid
 
 from . import bank, config, health, proxies
-from .leech import (
+from .easy_ai import (
     USING_CLOAK,
     _new_context,
     _ok,
