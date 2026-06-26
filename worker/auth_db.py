@@ -157,7 +157,7 @@ def create_or_update_user_key(username: str, rpm_limit: int, expires_in_days: in
                     WHERE key=?
                 """, (rpm_limit, expires_at, allowed_models, key))
             else:
-                key = "leech-" + secrets.token_hex(8)
+                key = "sk-" + secrets.token_hex(32)
                 c.execute("""
                     INSERT INTO api_keys(key, name, expires_at, rpm_limit, created_at, owner_username, allowed_models)
                     VALUES(?, ?, ?, ?, ?, ?, ?)
