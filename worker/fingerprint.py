@@ -130,7 +130,6 @@ def fingerprint() -> dict:
         "User-Agent": ua,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": lang,
-        "Accept-Encoding": "gzip, deflate, br, zstd",
         "Sec-Ch-Ua": f'"Chromium";v="{major}", "Google Chrome";v="{major}", "Not-A.Brand";v="99"',
         "Sec-Ch-Ua-Mobile": "?0",
         "Sec-Ch-Ua-Platform": platform,
