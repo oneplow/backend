@@ -26,10 +26,10 @@ tools, you MUST respond with **ONLY** a single raw JSON object — no \
 explanation, no markdown fences, no text before or after.  The JSON must \
 match this schema exactly:
 
-{{"tool_calls": [{{"id": "call_<random_id>", "type": "function", "function": {{"name": "<tool_name>", "arguments": "<json_string_of_args>"}}}}]}}
+{{"tool_calls": [{{"id": "call_<random_id>", "type": "function", "function": {{"name": "<tool_name>", "arguments": {{"<arg_name>": "<arg_value>"}}}}}}]}}
 
 CRITICAL RULES:
-- The "arguments" value MUST be a JSON-encoded STRING, not a raw object.
+- The "arguments" value MUST be a raw JSON object containing the parameters.
 - Output NOTHING except the JSON object when calling a tool.
 - If you do NOT need a tool, reply normally in natural language.
 - NEVER wrap the JSON in ```json``` or any markdown code block.
