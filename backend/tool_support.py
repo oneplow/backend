@@ -177,18 +177,39 @@ def _extract_tool_calls(text: str) -> list[dict] | None:
             pass
 
     # Step 3: regex scan for {"tool_calls": [...]} buried in preamble text
-    match = _TOOL_JSON_RE.search(text)
-    if match:
-        raw_match = match.group(0)
-        try:
-            data = json.loads(raw_match)
-            return _format_tool_calls(data.get("tool_calls", []))
-        except (json.JSONDecodeError, ValueError):
+    matches = _TOOL_JSON_RE.findall(text)
+    all_calls = []
+    
+    for raw_match in matches:
+        parsed = False
+        # Try appending common missing closing braces to fix truncated JSON
+        for fix_suffix in ["", "}", "]}", "}]}", "]}}", "} ]}", "]}}]", "]}}]}"]:
+            attempt = raw_match + fix_suffix
             try:
-                data = json.loads(fix_json(raw_match))
-                return _format_tool_calls(data.get("tool_calls", []))
+                data = json.loads(attempt)
+                all_calls.extend(data.get("tool_calls", []))
+                parsed = True
+                break
             except (json.JSONDecodeError, ValueError):
-                pass
+                try:
+                    data = json.loads(fix_json(attempt))
+                    all_calls.extend(data.get("tool_calls", []))
+                    parsed = True
+                    break
+                except (json.JSONDecodeError, ValueError):
+                    pass
+        
+        if not parsed:
+            # Last ditch: try to extract individual tool call objects using a looser regex
+            inner_matches = re.findall(r'\{\s*"id"\s*:\s*"[^"]+",\s*"type"\s*:\s*"function",\s*"function"\s*:\s*\{.*?\}\s*\}', attempt, re.DOTALL)
+            for inner in inner_matches:
+                try:
+                    all_calls.append(json.loads(inner))
+                except:
+                    pass
+
+    if all_calls:
+        return _format_tool_calls(all_calls)
 
     return None
 
