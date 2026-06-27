@@ -34,7 +34,7 @@ CRITICAL RULES:
 - If you do NOT need a tool, reply normally in natural language.
 - NEVER wrap the JSON in ```json``` or any markdown code block.
 - You can call MULTIPLE tools at once by adding more items to the "tool_calls" array.
-- ALWAYS use FORWARD SLASHES (/) for file paths, even on Windows. NEVER use backslashes (\).
+- ALWAYS use FORWARD SLASHES (/) for file paths, even on Windows. NEVER use backslashes (\\).
 
 THOROUGHNESS RULES (MANDATORY — NEVER SKIP):
 - When asked to analyze, explore, or work with a codebase, you MUST read \
@@ -229,13 +229,38 @@ class ToolCallStreamInterceptor:
         from worker import config as _cfg
         self._debug = getattr(_cfg, "TOOL_DEBUG", False)
         self.buffer = ""
+        self._mode = "inspecting"
+        self._passthrough_queue: list[str] = []
 
     def feed(self, delta: str) -> None:
         self.buffer += delta
+        
+        if self._mode == "passthrough":
+            self._passthrough_queue.append(delta)
+            return
+            
+        # We need a few characters to decide if it's a JSON tool call
+        if len(self.buffer.strip()) >= 5:
+            if self.buffer.strip().startswith("{") or self.buffer.strip().startswith("```"):
+                self._mode = "buffering"
+            else:
+                self._mode = "passthrough"
+                self._passthrough_queue.append(self.buffer)
 
     def get_passthrough(self) -> list[dict]:
-        """No mid-stream output in either mode."""
-        return []
+        """Stream text live if we are in passthrough mode (normal chat)."""
+        chunks = []
+        for text in self._passthrough_queue:
+            if text:
+                chunks.append({
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"content": text},
+                        "finish_reason": None,
+                    }]
+                })
+        self._passthrough_queue.clear()
+        return chunks
 
     @staticmethod
     def _pretty_summary(tool_calls: list) -> str:
@@ -269,22 +294,22 @@ class ToolCallStreamInterceptor:
         if read_files:
             count = len(read_files)
             file_list = ", ".join(read_files)
-            lines.append(f"📂 Reading {count} file{'s' if count > 1 else ''}: {file_list}")
+            lines.append(f"Reading {count} file{'s' if count > 1 else ''}: {file_list}")
         if other_calls:
-            lines.append(f"🔧 Calling: {', '.join(other_calls)}")
+            lines.append(f"Calling: {', '.join(other_calls)}")
 
-        return "\n".join(lines) if lines else "⚙️ Executing tool calls..."
+        return "\n".join(lines) if lines else "Executing tool calls..."
 
     def finish(self) -> list[dict]:
         if not self.buffer:
             return []
 
+        chunks = self.get_passthrough()
         tool_calls = _extract_tool_calls(self.buffer)
-        chunks = []
 
         if tool_calls:
-            if self._debug:
-                # Show pretty summary as text content
+            if self._debug and self._mode == "buffering":
+                # Only show summary if we suppressed the JSON from streaming
                 summary = self._pretty_summary(tool_calls)
                 chunks.append({
                     "choices": [{
@@ -293,7 +318,7 @@ class ToolCallStreamInterceptor:
                         "finish_reason": None,
                     }]
                 })
-            # Always emit the actual tool_calls for the IDE to execute
+            
             chunks.append({
                 "choices": [{
                     "index": 0,
@@ -301,8 +326,17 @@ class ToolCallStreamInterceptor:
                     "finish_reason": "tool_calls",
                 }]
             })
-        else:
-            # Normal text — emit as content
+        elif self._mode == "buffering":
+            # False alarm (started with { but wasn't a tool call)
+            chunks.append({
+                "choices": [{
+                    "index": 0,
+                    "delta": {"content": self.buffer},
+                    "finish_reason": None,
+                }]
+            })
+        elif self._mode == "inspecting" and self.buffer:
+            # Stream ended very early, just flush as text
             chunks.append({
                 "choices": [{
                     "index": 0,
