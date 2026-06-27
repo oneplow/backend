@@ -73,8 +73,17 @@ def _load():
         else:
             with open(config.PROXY_FILE, encoding="utf-8") as f:
                 pool += [p for p in (_parse(l) for l in f) if p]
-    _pool = pool
-    _rr = itertools.cycle(pool) if pool else None
+                
+    # Deduplicate by server URL to ensure no IP is repeated
+    unique_pool = []
+    seen = set()
+    for p in pool:
+        if p["server"] not in seen:
+            seen.add(p["server"])
+            unique_pool.append(p)
+            
+    _pool = unique_pool
+    _rr = itertools.cycle(unique_pool) if unique_pool else None
     _loaded = True
 
 

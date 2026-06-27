@@ -8,14 +8,4 @@
 38.154.185.97:6370:txdxgxni:gycbsl586pqm
 142.111.67.146:5611:txdxgxni:gycbsl586pqm
 191.96.254.138:6185:txdxgxni:gycbsl586pqm
-31.59.20.176:6754:htrbcnsu:8usyhkxzeu6y
-31.56.127.193:7684:htrbcnsu:8usyhkxzeu6y
-45.38.107.97:6014:htrbcnsu:8usyhkxzeu6y
-38.154.203.95:5863:htrbcnsu:8usyhkxzeu6y
-198.105.121.200:6462:htrbcnsu:8usyhkxzeu6y
-64.137.96.74:6641:htrbcnsu:8usyhkxzeu6y
-198.23.243.226:6361:htrbcnsu:8usyhkxzeu6y
-38.154.185.97:6370:htrbcnsu:8usyhkxzeu6y
-142.111.67.146:5611:htrbcnsu:8usyhkxzeu6y
-191.96.254.138:6185:htrbcnsu:8usyhkxzeu6y
 
