@@ -59,7 +59,8 @@ def _content_text(content) -> str:
 
 def _to_parts(messages: list) -> list:
     """[{role, content}] -> use.ai message-parts. Roles other than user/assistant
-    (e.g. system) are relabelled to user. Verified: the WS honors prior turns."""
+    (e.g. system) are relabelled to user. Consecutive messages of the same role
+    are merged to satisfy models that require alternating turns."""
     out = []
     for m in messages:
         content = _content_text(m.get("content")).strip()
@@ -68,9 +69,16 @@ def _to_parts(messages: list) -> list:
         role = m.get("role")
         if role not in ("user", "assistant"):
             role = "user"
-        out.append({
-            "id": uuid.uuid4().hex[:16], "role": role,
-            "parts": [{"type": "text", "text": content}], "metadata": {}})
+            
+        # Merge if same role as previous
+        if out and out[-1]["role"] == role:
+            out[-1]["parts"][0]["text"] += "\n\n" + content
+        else:
+            out.append({
+                "id": uuid.uuid4().hex[:16], "role": role,
+                "parts": [{"type": "text", "text": content}], "metadata": {}
+            })
+            
     if not out:
         out.append({"id": uuid.uuid4().hex[:16], "role": "user",
                     "parts": [{"type": "text", "text": ""}], "metadata": {}})
