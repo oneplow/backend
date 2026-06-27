@@ -39,6 +39,9 @@ CRITICAL RULES:
 THOROUGHNESS RULES (MANDATORY — NEVER SKIP):
 - When asked to analyze, explore, or work with a codebase, you MUST read \
 EVERY SINGLE file in the project — no exceptions.
+- This includes ALL file types: .py, .ts, .tsx, .js, .json, .css, .html, \
+__init__.py, Dockerfile, requirements.txt, README.md, .env, .bat, .sh, \
+.txt config files — EVERYTHING.
 - Do NOT stop after reading a few files to summarize. Keep calling tools \
 until you have read ALL files.  Only give your final answer AFTER reading \
 everything.
@@ -217,55 +220,25 @@ def _format_tool_calls(raw_calls: list) -> list[dict]:
 
 class ToolCallStreamInterceptor:
     """
-    Controlled by config.TOOL_DEBUG:
-      - TOOL_DEBUG=True  (dev): show a pretty human-readable summary of what
-        tools are being called (e.g. "Reading 3 files: main.py, config.py").
-        Never shows raw JSON.
-      - TOOL_DEBUG=False (prod): buffer the entire response, hide everything,
-        and only emit clean tool_calls or text.
+    ALWAYS buffers the entire response. Raw JSON never leaks to screen.
+      - TOOL_DEBUG=True  (dev): show pretty summary + tool_calls
+      - TOOL_DEBUG=False (prod): show only tool_calls (or text if no tools)
     """
 
     def __init__(self):
         from worker import config as _cfg
         self._debug = getattr(_cfg, "TOOL_DEBUG", False)
         self.buffer = ""
-        self._mode = "inspecting"
-        self._passthrough_queue: list[str] = []
 
     def feed(self, delta: str) -> None:
         self.buffer += delta
-        
-        if self._mode == "passthrough":
-            self._passthrough_queue.append(delta)
-            return
-            
-        # We need a few characters to decide if it's a JSON tool call
-        if len(self.buffer.strip()) >= 5:
-            if self.buffer.strip().startswith("{") or self.buffer.strip().startswith("```"):
-                self._mode = "buffering"
-            else:
-                self._mode = "passthrough"
-                self._passthrough_queue.append(self.buffer)
 
     def get_passthrough(self) -> list[dict]:
-        """Stream text live if we are in passthrough mode (normal chat)."""
-        chunks = []
-        for text in self._passthrough_queue:
-            if text:
-                chunks.append({
-                    "choices": [{
-                        "index": 0,
-                        "delta": {"content": text},
-                        "finish_reason": None,
-                    }]
-                })
-        self._passthrough_queue.clear()
-        return chunks
+        return []
 
     @staticmethod
     def _pretty_summary(tool_calls: list) -> str:
-        """Build a human-readable summary like Antigravity IDE style."""
-        lines = []
+        """Build a human-readable summary."""
         read_files = []
         other_calls = []
 
@@ -280,7 +253,6 @@ class ToolCallStreamInterceptor:
 
             if "read" in name.lower() or "file" in name.lower():
                 fp = args.get("filePath", args.get("path", "?"))
-                # Extract just the filename
                 basename = fp.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
                 start = args.get("startLine", "")
                 end = args.get("endLine", "")
@@ -291,34 +263,29 @@ class ToolCallStreamInterceptor:
             else:
                 other_calls.append(f"`{name}`")
 
+        lines = []
         if read_files:
-            count = len(read_files)
-            file_list = ", ".join(read_files)
-            lines.append(f"Reading {count} file{'s' if count > 1 else ''}: {file_list}")
+            lines.append(f"Reading {len(read_files)} file{'s' if len(read_files) > 1 else ''}: {', '.join(read_files)}")
         if other_calls:
             lines.append(f"Calling: {', '.join(other_calls)}")
-
         return "\n".join(lines) if lines else "Executing tool calls..."
 
     def finish(self) -> list[dict]:
         if not self.buffer:
             return []
 
-        chunks = self.get_passthrough()
         tool_calls = _extract_tool_calls(self.buffer)
+        chunks = []
 
         if tool_calls:
-            if self._debug and self._mode == "buffering":
-                # Only show summary if we suppressed the JSON from streaming
-                summary = self._pretty_summary(tool_calls)
+            if self._debug:
                 chunks.append({
                     "choices": [{
                         "index": 0,
-                        "delta": {"content": summary},
+                        "delta": {"content": self._pretty_summary(tool_calls)},
                         "finish_reason": None,
                     }]
                 })
-            
             chunks.append({
                 "choices": [{
                     "index": 0,
@@ -326,17 +293,7 @@ class ToolCallStreamInterceptor:
                     "finish_reason": "tool_calls",
                 }]
             })
-        elif self._mode == "buffering":
-            # False alarm (started with { but wasn't a tool call)
-            chunks.append({
-                "choices": [{
-                    "index": 0,
-                    "delta": {"content": self.buffer},
-                    "finish_reason": None,
-                }]
-            })
-        elif self._mode == "inspecting" and self.buffer:
-            # Stream ended very early, just flush as text
+        else:
             chunks.append({
                 "choices": [{
                     "index": 0,
@@ -346,5 +303,3 @@ class ToolCallStreamInterceptor:
             })
 
         return chunks
-
-
