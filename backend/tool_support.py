@@ -34,6 +34,7 @@ CRITICAL RULES:
 - If you do NOT need a tool, reply normally in natural language.
 - NEVER wrap the JSON in ```json``` or any markdown code block.
 - You can call MULTIPLE tools at once by adding more items to the "tool_calls" array.
+- ALWAYS use FORWARD SLASHES (/) for file paths, even on Windows. NEVER use backslashes (\).
 
 THOROUGHNESS RULES:
 - When asked to analyze, debug, or work with a codebase, you MUST read ALL \
@@ -148,22 +149,37 @@ def _extract_tool_calls(text: str) -> list[dict] | None:
             cleaned = cleaned[:-3]
         cleaned = cleaned.strip()
 
+    # Helper to fix common Claude hallucination: unescaped Windows paths like c:\Users
+    def fix_json(s: str) -> str:
+        # Replaces any backslash that isn't part of a valid JSON escape sequence with a double backslash
+        return re.sub(r'\\(?=[^"\\/bfnrtu])', r'\\\\', s)
+
     # Step 2: try to parse the whole thing as JSON first (fast path)
     try:
         data = json.loads(cleaned)
         if "tool_calls" in data:
             return _format_tool_calls(data["tool_calls"])
     except (json.JSONDecodeError, ValueError):
-        pass
+        try:
+            data = json.loads(fix_json(cleaned))
+            if "tool_calls" in data:
+                return _format_tool_calls(data["tool_calls"])
+        except (json.JSONDecodeError, ValueError):
+            pass
 
     # Step 3: regex scan for {"tool_calls": [...]} buried in preamble text
     match = _TOOL_JSON_RE.search(text)
     if match:
+        raw_match = match.group(0)
         try:
-            data = json.loads(match.group(0))
+            data = json.loads(raw_match)
             return _format_tool_calls(data.get("tool_calls", []))
         except (json.JSONDecodeError, ValueError):
-            pass
+            try:
+                data = json.loads(fix_json(raw_match))
+                return _format_tool_calls(data.get("tool_calls", []))
+            except (json.JSONDecodeError, ValueError):
+                pass
 
     return None
 
