@@ -36,12 +36,16 @@ CRITICAL RULES:
 - You can call MULTIPLE tools at once by adding more items to the "tool_calls" array.
 - ALWAYS use FORWARD SLASHES (/) for file paths, even on Windows. NEVER use backslashes (\).
 
-THOROUGHNESS RULES:
-- When asked to analyze, debug, or work with a codebase, you MUST read ALL \
-relevant files before giving your answer — not just 1 or 2.
-- If a project has config files, entry points, utilities, and sub-modules, \
-read them ALL.  Do NOT guess or summarize from partial information.
-- Prefer calling multiple read operations in a SINGLE tool_calls response \
+THOROUGHNESS RULES (MANDATORY — NEVER SKIP):
+- When asked to analyze, explore, or work with a codebase, you MUST read \
+EVERY SINGLE file in the project — no exceptions.
+- Do NOT stop after reading a few files to summarize. Keep calling tools \
+until you have read ALL files.  Only give your final answer AFTER reading \
+everything.
+- NEVER say "I haven't read X yet" or "let me know if you want me to read \
+more".  Just READ IT immediately without asking.
+- If a directory has 20 files, you must read all 20.  If it has 50, read 50.
+- Batch as many read operations as possible into a SINGLE tool_calls response \
 to minimize round-trips.
 - If you are unsure whether a file is relevant, READ IT.  It is always \
 better to read too much than too little.
@@ -49,8 +53,10 @@ better to read too much than too little.
 ANTI-HALLUCINATION RULES:
 - You do NOT have any subagents or assistants.
 - You MUST perform all file reading yourself by explicitly calling the tools.
-- Do NOT claim to have explored the codebase if you did not explicitly call the read tools.
+- Do NOT claim to have explored the codebase if you did not explicitly call \
+the read tools for EVERY file.
 - Do NOT hallucinate file contents or summarize without reading.
+- NEVER guess what a file contains based on its name alone.
 
 Available tools:
 {tool_list}"""
@@ -211,65 +217,83 @@ def _format_tool_calls(raw_calls: list) -> list[dict]:
 
 class ToolCallStreamInterceptor:
     """
-    When tools are present, Cursor/Cline ALWAYS sends `tools` in every request.
-    If we blindly buffer everything, normal text responses will freeze the IDE
-    until the 500-line script is fully generated.
-
-    This interceptor buffers the full response in `self.full_buffer` to ensure
-    we can always parse tool calls at the end.
-    For streaming (UX):
-    - It checks the first 5 chars. If it looks like a tool JSON, it suppresses
-      the `content` stream (so the JSON is hidden from the user).
-    - If it's normal text, it enters `passthrough` mode and streams all text
-      as `content` immediately. If the AI then appends a JSON tool call at the
-      end, the user will see the raw JSON text, but it WILL still execute.
+    Controlled by config.TOOL_DEBUG:
+      - TOOL_DEBUG=True  (dev): show a pretty human-readable summary of what
+        tools are being called (e.g. "Reading 3 files: main.py, config.py").
+        Never shows raw JSON.
+      - TOOL_DEBUG=False (prod): buffer the entire response, hide everything,
+        and only emit clean tool_calls or text.
     """
 
     def __init__(self):
-        self.full_buffer = ""
-        self.mode = "inspecting"  # 'inspecting', 'buffering', 'passthrough'
-        self.passthrough_queue = []
+        from worker import config as _cfg
+        self._debug = getattr(_cfg, "TOOL_DEBUG", False)
+        self.buffer = ""
 
     def feed(self, delta: str) -> None:
-        self.full_buffer += delta
-        
-        if self.mode == "passthrough":
-            self.passthrough_queue.append(delta)
-            return
-            
-        # We need a few characters to decide
-        if len(self.full_buffer.strip()) >= 5:
-            if self.full_buffer.strip().startswith("{") or self.full_buffer.strip().startswith("```"):
-                self.mode = "buffering"
-            else:
-                self.mode = "passthrough"
-                self.passthrough_queue.append(self.full_buffer)
+        self.buffer += delta
 
     def get_passthrough(self) -> list[dict]:
-        """Call this in the loop to yield any text that is safe to stream."""
+        """No mid-stream output in either mode."""
+        return []
+
+    @staticmethod
+    def _pretty_summary(tool_calls: list) -> str:
+        """Build a human-readable summary like Antigravity IDE style."""
+        lines = []
+        read_files = []
+        other_calls = []
+
+        for tc in tool_calls:
+            func = tc.get("function", {})
+            name = func.get("name", "?")
+            args_raw = func.get("arguments", "{}")
+            try:
+                args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+            except (json.JSONDecodeError, ValueError):
+                args = {}
+
+            if "read" in name.lower() or "file" in name.lower():
+                fp = args.get("filePath", args.get("path", "?"))
+                # Extract just the filename
+                basename = fp.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+                start = args.get("startLine", "")
+                end = args.get("endLine", "")
+                if start and end:
+                    read_files.append(f"`{basename}` #L{start}-{end}")
+                else:
+                    read_files.append(f"`{basename}`")
+            else:
+                other_calls.append(f"`{name}`")
+
+        if read_files:
+            count = len(read_files)
+            file_list = ", ".join(read_files)
+            lines.append(f"📂 Reading {count} file{'s' if count > 1 else ''}: {file_list}")
+        if other_calls:
+            lines.append(f"🔧 Calling: {', '.join(other_calls)}")
+
+        return "\n".join(lines) if lines else "⚙️ Executing tool calls..."
+
+    def finish(self) -> list[dict]:
+        if not self.buffer:
+            return []
+
+        tool_calls = _extract_tool_calls(self.buffer)
         chunks = []
-        for text in self.passthrough_queue:
-            if text:
+
+        if tool_calls:
+            if self._debug:
+                # Show pretty summary as text content
+                summary = self._pretty_summary(tool_calls)
                 chunks.append({
                     "choices": [{
                         "index": 0,
-                        "delta": {"content": text},
+                        "delta": {"content": summary},
                         "finish_reason": None,
                     }]
                 })
-        self.passthrough_queue.clear()
-        return chunks
-
-    def finish(self) -> list[dict]:
-        """
-        Called when the upstream stream is done.
-        """
-        chunks = self.get_passthrough()
-        
-        tool_calls = _extract_tool_calls(self.full_buffer)
-        
-        if tool_calls:
-            # We found a tool call! Yield it.
+            # Always emit the actual tool_calls for the IDE to execute
             chunks.append({
                 "choices": [{
                     "index": 0,
@@ -277,25 +301,16 @@ class ToolCallStreamInterceptor:
                     "finish_reason": "tool_calls",
                 }]
             })
-        elif self.mode == "buffering":
-            # We suppressed the output thinking it was a tool call, but it wasn't.
-            # Flush the entire buffer as text.
+        else:
+            # Normal text — emit as content
             chunks.append({
                 "choices": [{
                     "index": 0,
-                    "delta": {"content": self.full_buffer},
+                    "delta": {"content": self.buffer},
                     "finish_reason": None,
                 }]
             })
-        elif self.mode == "inspecting" and self.full_buffer:
-            # Stream ended very early, just flush as text
-            chunks.append({
-                "choices": [{
-                    "index": 0,
-                    "delta": {"content": self.full_buffer},
-                    "finish_reason": None,
-                }]
-            })
-            
+
         return chunks
+
 

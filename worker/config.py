@@ -160,6 +160,9 @@ ACCOUNT_POOL_REFILL_SEC = 3                             # how often to top the p
 ACCOUNT_TTL_SEC = 600                                   # drop pooled accounts older than this
 # No Chromium in the WS path -> serve many at once (browser path stays capped low)
 DIRECT_MAX_CONCURRENCY = 24                             # concurrent WS completions
+# Show raw tool-call JSON in the stream (useful for debugging).
+# Set to False in production so users never see ugly JSON blobs.
+TOOL_DEBUG = os.environ.get("TOOL_DEBUG", "1").strip().lower() in ("1", "true", "yes")  # True = show JSON, False = hide
 
 # ---- Direct API (FAST PATH; skips the browser on the hot path) --------------
 # VERIFIED 2026-06-17: use.ai streams replies over a WEBSOCKET (Cloudflare Agents
