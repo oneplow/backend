@@ -47,6 +47,10 @@ You already HAVE the command — it's the read_file tool. CALL IT.
 - NEVER ask the user to tell you to read files. Just DO IT.
 - If the user asks about the codebase, your response must be a tool_calls \
 JSON — not text explaining that you need to read files.
+- You may ONLY call tools that are listed below. Do NOT invent or hallucinate \
+tool names. If a tool is not listed below, it does NOT exist. For example, \
+do NOT call manage_todo_list, list_dir, file_search, or any other tool that \
+is not explicitly listed in the Available tools section.
 
 THOROUGHNESS RULES (MANDATORY — NEVER SKIP):
 - You MUST read EVERY SINGLE file in the project — no exceptions.
@@ -153,7 +157,7 @@ _TOOL_JSON_RE = re.compile(
 )
 
 
-def _extract_tool_calls(text: str) -> list[dict] | None:
+def _extract_tool_calls(text: str, valid_tools: set | None = None) -> list[dict] | None:
     """
     Scan *text* for a JSON blob matching {"tool_calls": [...]}.
     Returns the formatted list of tool calls, or None if not found.
@@ -178,12 +182,12 @@ def _extract_tool_calls(text: str) -> list[dict] | None:
     try:
         data = json.loads(cleaned)
         if "tool_calls" in data:
-            return _format_tool_calls(data["tool_calls"])
+            return _format_tool_calls(data["tool_calls"], valid_tools)
     except (json.JSONDecodeError, ValueError):
         try:
             data = json.loads(fix_json(cleaned))
             if "tool_calls" in data:
-                return _format_tool_calls(data["tool_calls"])
+                return _format_tool_calls(data["tool_calls"], valid_tools)
         except (json.JSONDecodeError, ValueError):
             pass
 
@@ -235,26 +239,30 @@ def _extract_tool_calls(text: str) -> list[dict] | None:
         start_idx = idx + 12
 
     if all_calls:
-        return _format_tool_calls(all_calls)
+        return _format_tool_calls(all_calls, valid_tools)
 
     return None
 
 
-def _format_tool_calls(raw_calls: list) -> list[dict]:
-    """Normalise tool calls into OpenAI format."""
+def _format_tool_calls(raw_calls: list, valid_tools: set | None = None) -> list[dict]:
+    """Normalise tool calls into OpenAI format, filtering out hallucinated tools."""
     out = []
     for i, tc in enumerate(raw_calls):
         func = tc.get("function", {})
+        name = func.get("name", "")
+        # Skip hallucinated tool names that the IDE doesn't know about
+        if valid_tools and name not in valid_tools:
+            continue
         args = func.get("arguments", "")
         # If AI returned arguments as a dict instead of a string, fix it
         if isinstance(args, dict):
             args = json.dumps(args, ensure_ascii=False)
         out.append({
-            "index": i,
+            "index": len(out),
             "id": tc.get("id", f"call_{uuid.uuid4().hex[:12]}"),
             "type": "function",
             "function": {
-                "name": func.get("name", ""),
+                "name": name,
                 "arguments": args,
             },
         })
@@ -272,10 +280,11 @@ class ToolCallStreamInterceptor:
       - TOOL_DEBUG=False (prod): show only tool_calls (or text if no tools)
     """
 
-    def __init__(self):
+    def __init__(self, valid_tools: set | None = None):
         from worker import config as _cfg
         self._debug = getattr(_cfg, "TOOL_DEBUG", False)
         self.buffer = ""
+        self._valid_tools = valid_tools  # set of real tool names from IDE
 
     def feed(self, delta: str) -> None:
         self.buffer += delta
@@ -321,7 +330,7 @@ class ToolCallStreamInterceptor:
         if not self.buffer:
             return []
 
-        tool_calls = _extract_tool_calls(self.buffer)
+        tool_calls = _extract_tool_calls(self.buffer, self._valid_tools)
         chunks = []
 
         if tool_calls:

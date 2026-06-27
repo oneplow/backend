@@ -434,7 +434,8 @@ async def openai_completions(req: Request):
 
             if tools:
                 # Buffer only if it's a tool call, otherwise stream in real-time
-                interceptor = ToolCallStreamInterceptor()
+                valid_tool_names = {t["function"]["name"] for t in tools if t.get("type") == "function"}
+                interceptor = ToolCallStreamInterceptor(valid_tools=valid_tool_names)
                 async for delta in run_guarded_gen(lambda: stream_messages(model, msgs)):
                     interceptor.feed(delta)
                     for chunk in interceptor.get_passthrough():
@@ -458,7 +459,8 @@ async def openai_completions(req: Request):
 
     if tools:
         from backend.tool_support import _extract_tool_calls
-        tool_calls = _extract_tool_calls(reply)
+        valid_tool_names = {t["function"]["name"] for t in tools if t.get("type") == "function"}
+        tool_calls = _extract_tool_calls(reply, valid_tool_names)
         if tool_calls:
             block = _openai_block("", model)
             block["choices"][0]["message"]["tool_calls"] = tool_calls
