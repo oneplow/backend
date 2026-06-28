@@ -728,11 +728,9 @@ def get_request_logs(username: str, limit: int = 50, offset: int = 0):
     with _lock:
         c = _open()
         try:
-            c.execute('SELECT id, model, method, url, is_success, input_tokens, output_tokens, latency_ms, created_at FROM request_logs WHERE username = ? ORDER BY created_at DESC LIMIT ? OFFSET ?', (username, limit, offset))
-            rows = c.fetchall()
+            rows = c.execute('SELECT id, model, method, url, is_success, input_tokens, output_tokens, latency_ms, created_at FROM request_logs WHERE username = ? ORDER BY created_at DESC LIMIT ? OFFSET ?', (username, limit, offset)).fetchall()
             
-            c.execute('SELECT COUNT(*) FROM request_logs WHERE username = ?', (username,))
-            total = c.fetchone()[0]
+            total = c.execute('SELECT COUNT(*) FROM request_logs WHERE username = ?', (username,)).fetchone()[0]
             
             return {
                 "logs": [
@@ -758,11 +756,9 @@ def admin_get_request_logs(limit: int = 50, offset: int = 0):
     with _lock:
         c = _open()
         try:
-            c.execute('SELECT id, username, model, method, url, is_success, input_tokens, output_tokens, latency_ms, created_at FROM request_logs ORDER BY created_at DESC LIMIT ? OFFSET ?', (limit, offset))
-            rows = c.fetchall()
+            rows = c.execute('SELECT id, username, model, method, url, is_success, input_tokens, output_tokens, latency_ms, created_at FROM request_logs ORDER BY created_at DESC LIMIT ? OFFSET ?', (limit, offset)).fetchall()
             
-            c.execute('SELECT COUNT(*) FROM request_logs')
-            total = c.fetchone()[0]
+            total = c.execute('SELECT COUNT(*) FROM request_logs').fetchone()[0]
             
             return {
                 "logs": [
