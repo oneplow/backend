@@ -11,6 +11,7 @@ On startup a background loop keeps the account bank topped up so signup stays
 out of the hot path.
 """
 import asyncio
+from collections import defaultdict, deque
 import json
 import logging
 import time
@@ -31,14 +32,49 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("backend")
 app = FastAPI(title="WMan")
 
-# Allow cross-origin calls so any external client can hit the API.
+# Allow cross-origin calls for the frontend domains we trust in the browser.
+_cors_allow_origins = ["*"] if config.CORS_ALLOW_ALL else config.CORS_ALLOW_ORIGINS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_allow_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_auth_attempts: dict[tuple[str, str], deque[float]] = defaultdict(deque)
+
+
+def _get_client_ip(req: Request) -> str:
+    forwarded_for = req.headers.get("x-forwarded-for", "").strip()
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    real_ip = req.headers.get("x-real-ip", "").strip()
+    if real_ip:
+        return real_ip
+    return req.client.host if req.client else "unknown"
+
+
+def _enforce_auth_rate_limit(req: Request, bucket: str) -> None:
+    now = time.time()
+    window_start = now - config.AUTH_RATE_LIMIT_WINDOW_SEC
+    client_ip = _get_client_ip(req)
+    key = (bucket, client_ip)
+    attempts = _auth_attempts[key]
+
+    while attempts and attempts[0] < window_start:
+        attempts.popleft()
+
+    if len(attempts) >= config.AUTH_RATE_LIMIT_MAX_REQUESTS:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Too many auth attempts. Try again in "
+                f"{config.AUTH_RATE_LIMIT_WINDOW_SEC} seconds."
+            ),
+        )
+
+    attempts.append(now)
 
 
 def _require_admin_key(req: Request) -> None:
@@ -122,7 +158,8 @@ class RegisterRequest(BaseModel):
     email: str | None = None
 
 @app.post("/auth/register")
-async def register(req: RegisterRequest):
+async def register(req: RegisterRequest, request: Request):
+    _enforce_auth_rate_limit(request, "register")
     success, token_or_err = auth_db.register_user(req.username, req.password, req.email)
     if not success:
         raise HTTPException(status_code=400, detail=token_or_err)
@@ -135,9 +172,21 @@ class GoogleAuthRequest(BaseModel):
     credential: str
 
 @app.post("/auth/google")
-async def google_auth(req: GoogleAuthRequest):
+async def google_auth(req: GoogleAuthRequest, request: Request):
+    _enforce_auth_rate_limit(request, "google")
+    if not config.GOOGLE_CLIENT_ID:
+        log.error("GOOGLE_CLIENT_ID is not configured on the backend")
+        raise HTTPException(status_code=500, detail="Google login is not configured")
+
     try:
-        idinfo = id_token.verify_oauth2_token(req.credential, google_requests.Request())
+        idinfo = id_token.verify_oauth2_token(
+            req.credential,
+            google_requests.Request(),
+            config.GOOGLE_CLIENT_ID,
+        )
+        issuer = idinfo.get("iss")
+        if issuer not in ("accounts.google.com", "https://accounts.google.com"):
+            raise HTTPException(status_code=401, detail="Invalid Google token issuer")
         email = idinfo.get("email")
         name = idinfo.get("name", "")
         
@@ -160,7 +209,8 @@ class LoginRequest(BaseModel):
     password: str
 
 @app.post("/auth/login")
-async def login(req: LoginRequest):
+async def login(req: LoginRequest, request: Request):
+    _enforce_auth_rate_limit(request, "login")
     success, token_or_err = auth_db.login_user(req.username, req.password)
     if not success:
         raise HTTPException(status_code=401, detail=token_or_err)

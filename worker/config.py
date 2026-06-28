@@ -17,6 +17,17 @@ TARGET_URL = "https://use.ai"
 # If ADMIN_KEY is empty, the admin endpoints are disabled.
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "").strip()
 AUTH_DB_PATH = "bank/auth.db"
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+
+_cors_origins_raw = os.environ.get(
+    "CORS_ALLOW_ORIGINS",
+    "https://aistudio.mineway.cloud,http://localhost:5173,http://127.0.0.1:5173",
+)
+CORS_ALLOW_ORIGINS = [origin.strip() for origin in _cors_origins_raw.split(",") if origin.strip()]
+CORS_ALLOW_ALL = os.environ.get("CORS_ALLOW_ALL", "0").strip().lower() in ("1", "true", "yes")
+
+AUTH_RATE_LIMIT_WINDOW_SEC = max(1, int(os.environ.get("AUTH_RATE_LIMIT_WINDOW_SEC", "60")))
+AUTH_RATE_LIMIT_MAX_REQUESTS = max(1, int(os.environ.get("AUTH_RATE_LIMIT_MAX_REQUESTS", "10")))
 
 # ---- Browser behavior -------------------------------------------------------
 HEADLESS = True              # spike.py flips this to False so you can watch
