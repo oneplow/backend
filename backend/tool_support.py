@@ -15,6 +15,7 @@ Strategy:
 import json
 import re
 import uuid
+from pathlib import PurePosixPath, PureWindowsPath
 
 # ---------------------------------------------------------------------------
 # 1. System prompt generation
@@ -328,6 +329,76 @@ class ToolCallStreamInterceptor:
         return []
 
     @staticmethod
+    def _coerce_file_paths(value) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value] if value.strip() else []
+        if isinstance(value, list):
+            paths: list[str] = []
+            for item in value:
+                paths.extend(ToolCallStreamInterceptor._coerce_file_paths(item))
+            return paths
+        if isinstance(value, dict):
+            return ToolCallStreamInterceptor._extract_file_paths(value)
+        return []
+
+    @staticmethod
+    def _extract_file_paths(args: dict) -> list[str]:
+        path_keys = (
+            "filePath",
+            "file_path",
+            "filepath",
+            "path",
+            "paths",
+            "file",
+            "files",
+            "filename",
+            "fileName",
+            "relative_path",
+            "absolute_path",
+            "uri",
+            "url",
+        )
+        paths: list[str] = []
+
+        for key in path_keys:
+            if key in args:
+                paths.extend(ToolCallStreamInterceptor._coerce_file_paths(args.get(key)))
+
+        if not paths:
+            for value in args.values():
+                if isinstance(value, dict):
+                    paths.extend(ToolCallStreamInterceptor._extract_file_paths(value))
+                elif isinstance(value, list):
+                    paths.extend(ToolCallStreamInterceptor._coerce_file_paths(value))
+
+        seen = set()
+        unique_paths = []
+        for path in paths:
+            normalized = path.strip()
+            if normalized and normalized not in seen:
+                unique_paths.append(normalized)
+                seen.add(normalized)
+        return unique_paths
+
+    @staticmethod
+    def _file_label(path: str) -> str:
+        normalized = path.replace("\\", "/").rstrip("/")
+        if not normalized:
+            return "unknown file"
+        return PurePosixPath(normalized).name or PureWindowsPath(path).name or normalized
+
+    @staticmethod
+    def _file_uri(path: str) -> str:
+        uri = path.replace("\\", "/")
+        if uri.startswith("file://"):
+            return uri
+        if not uri.startswith("/"):
+            uri = "/" + uri
+        return f"file://{uri}"
+
+    @staticmethod
     def _pretty_summary(tool_calls: list) -> str:
         """Build a human-readable summary with clickable links."""
         read_files = []
@@ -342,23 +413,24 @@ class ToolCallStreamInterceptor:
             except (json.JSONDecodeError, ValueError):
                 args = {}
 
+            paths = ToolCallStreamInterceptor._extract_file_paths(args)
+
             if "read" in name.lower() or "file" in name.lower():
-                fp = args.get("filePath", args.get("path", "?"))
-                # fp should be an absolute path, we'll format it as a file:// link
-                # use forward slashes for the uri
-                uri = fp.replace("\\", "/")
-                if not uri.startswith("/"):
-                    uri = "/" + uri
-                basename = fp.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-                
                 start = args.get("startLine", "")
                 end = args.get("endLine", "")
-                if start and end:
-                    read_files.append(f"- [{basename} #L{start}-{end}](file://{uri}#L{start}-L{end})")
-                else:
-                    read_files.append(f"- [{basename}](file://{uri})")
+                for fp in paths or ["unknown file"]:
+                    uri = ToolCallStreamInterceptor._file_uri(fp)
+                    basename = ToolCallStreamInterceptor._file_label(fp)
+                    if start and end and len(paths) == 1:
+                        read_files.append(f"- [{basename} #L{start}-{end}]({uri}#L{start}-L{end})")
+                    else:
+                        read_files.append(f"- [{basename}]({uri})")
             else:
-                other_calls.append(f"- `{name}`")
+                details = ""
+                if args:
+                    preview = ", ".join(f"{k}={v}" for k, v in list(args.items())[:2])
+                    details = f" {preview}"
+                other_calls.append(f"- `{name}`{details}")
 
         lines = []
         if read_files:

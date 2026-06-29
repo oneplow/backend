@@ -822,29 +822,60 @@ def insert_request_log(key: str, req_id: str, model: str, method: str, url: str,
         finally:
             c.close()
 
+def _merge_prompt_logs(logs: list[dict], window_seconds: int = 90) -> list[dict]:
+    """Merge nearby gateway calls from one prompt into a single display row."""
+    merged: list[dict] = []
+
+    for log in logs:
+        if not merged:
+            merged.append({**log, "request_count": 1})
+            continue
+
+        last = merged[-1]
+        same_user = last.get("username") == log.get("username")
+        same_model = last.get("model") == log.get("model")
+        same_route = last.get("method") == log.get("method") and last.get("url") == log.get("url")
+        close_enough = abs(float(last.get("created_at", 0)) - float(log.get("created_at", 0))) <= window_seconds
+
+        if same_user and same_model and same_route and close_enough:
+            last["input_tokens"] = int(last.get("input_tokens") or 0) + int(log.get("input_tokens") or 0)
+            last["output_tokens"] = int(last.get("output_tokens") or 0) + int(log.get("output_tokens") or 0)
+            last["latency_ms"] = int(last.get("latency_ms") or 0) + int(log.get("latency_ms") or 0)
+            last["is_success"] = bool(last.get("is_success")) and bool(log.get("is_success"))
+            last["request_count"] = int(last.get("request_count") or 1) + 1
+        else:
+            merged.append({**log, "request_count": 1})
+
+    return merged
+
+
 def get_request_logs(username: str, limit: int = 50, offset: int = 0):
     with _lock:
         c = _open()
         try:
-            rows = c.execute('SELECT id, model, method, url, is_success, input_tokens, output_tokens, latency_ms, created_at FROM request_logs WHERE username = ? ORDER BY created_at DESC LIMIT ? OFFSET ?', (username, limit, offset)).fetchall()
-            
+            rows = c.execute('SELECT id, username, model, method, url, is_success, input_tokens, output_tokens, latency_ms, created_at FROM request_logs WHERE username = ? ORDER BY created_at DESC LIMIT ? OFFSET ?', (username, limit, offset)).fetchall()
+
             total = c.execute('SELECT COUNT(*) FROM request_logs WHERE username = ?', (username,)).fetchone()[0]
-            
+
+            logs = [
+                {
+                    "id": r[0],
+                    "username": r[1],
+                    "model": r[2],
+                    "method": r[3],
+                    "url": r[4],
+                    "is_success": bool(r[5]),
+                    "input_tokens": r[6],
+                    "output_tokens": r[7],
+                    "latency_ms": r[8],
+                    "created_at": r[9]
+                }
+                for r in rows
+            ]
+            merged_logs = _merge_prompt_logs(logs)
+
             return {
-                "logs": [
-                    {
-                        "id": r[0],
-                        "model": r[1],
-                        "method": r[2],
-                        "url": r[3],
-                        "is_success": bool(r[4]),
-                        "input_tokens": r[5],
-                        "output_tokens": r[6],
-                        "latency_ms": r[7],
-                        "created_at": r[8]
-                    }
-                    for r in rows
-                ],
+                "logs": merged_logs,
                 "total": total
             }
         finally:
@@ -858,22 +889,25 @@ def admin_get_request_logs(limit: int = 50, offset: int = 0):
             
             total = c.execute('SELECT COUNT(*) FROM request_logs').fetchone()[0]
             
+            logs = [
+                {
+                    "id": r[0],
+                    "username": r[1],
+                    "model": r[2],
+                    "method": r[3],
+                    "url": r[4],
+                    "is_success": bool(r[5]),
+                    "input_tokens": r[6],
+                    "output_tokens": r[7],
+                    "latency_ms": r[8],
+                    "created_at": r[9]
+                }
+                for r in rows
+            ]
+            merged_logs = _merge_prompt_logs(logs)
+
             return {
-                "logs": [
-                    {
-                        "id": r[0],
-                        "username": r[1],
-                        "model": r[2],
-                        "method": r[3],
-                        "url": r[4],
-                        "is_success": bool(r[5]),
-                        "input_tokens": r[6],
-                        "output_tokens": r[7],
-                        "latency_ms": r[8],
-                        "created_at": r[9]
-                    }
-                    for r in rows
-                ],
+                "logs": merged_logs,
                 "total": total
             }
         finally:
