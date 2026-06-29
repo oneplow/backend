@@ -79,13 +79,27 @@ def _enforce_auth_rate_limit(req: Request, bucket: str) -> None:
 
 
 def _require_admin_key(req: Request) -> None:
-    if not config.ADMIN_KEY:
-        raise HTTPException(status_code=403, detail="Admin API is disabled (ADMIN_KEY not set)")
+    """Legacy admin auth: accepts ADMIN_KEY bearer or role-based admin session."""
+    # First check role-based auth via session token
     auth = req.headers.get("authorization", "")
     token = auth.removeprefix("Bearer ").strip() if auth.lower().startswith("bearer ") else ""
+    
+    if token:
+        # Check if this is a session token with admin role
+        user_info = auth_db.get_full_user_by_token(token)
+        if user_info and user_info.get("role") == "admin":
+            return
+        
+        # Fallback: check ADMIN_KEY
+        if config.ADMIN_KEY and token == config.ADMIN_KEY:
+            return
+    
+    # Check x-api-key header as fallback
     key = req.headers.get("x-api-key", "").strip()
-    if token != config.ADMIN_KEY and key != config.ADMIN_KEY:
-        raise HTTPException(status_code=401, detail="Invalid admin key")
+    if config.ADMIN_KEY and key == config.ADMIN_KEY:
+        return
+    
+    raise HTTPException(status_code=401, detail="Admin access required")
 
 def _require_api_key(req: Request, model: str) -> str:
     auth = req.headers.get("authorization", "")
@@ -126,7 +140,17 @@ def _get_dashboard_payload(req: Request) -> dict:
     key = req.headers.get("x-api-key", "").strip()
 
     dashboard: dict | None = None
-    if config.ADMIN_KEY and (bearer == config.ADMIN_KEY or key == config.ADMIN_KEY):
+    
+    # Check role-based admin first, then ADMIN_KEY fallback
+    is_admin = False
+    if bearer:
+        user_info = auth_db.get_full_user_by_token(bearer)
+        if user_info and user_info.get("role") == "admin":
+            is_admin = True
+    if not is_admin and config.ADMIN_KEY and (bearer == config.ADMIN_KEY or key == config.ADMIN_KEY):
+        is_admin = True
+    
+    if is_admin:
         dashboard = {
             "mode": "admin",
             "key_count": len(auth_db.list_keys()),
@@ -161,10 +185,10 @@ class RegisterRequest(BaseModel):
 @app.post("/auth/register")
 async def register(req: RegisterRequest, request: Request):
     _enforce_auth_rate_limit(request, "register")
-    success, token_or_err = auth_db.register_user(req.username, req.password, req.email)
+    success, token_or_err, role = auth_db.register_user(req.username, req.password, req.email)
     if not success:
         raise HTTPException(status_code=400, detail=token_or_err)
-    return {"token": token_or_err, "username": req.username}
+    return {"token": token_or_err, "username": req.username, "role": role}
 
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
@@ -229,11 +253,11 @@ async def google_auth(req: GoogleAuthRequest, request: Request):
     try:
         email, name = _resolve_google_identity(req)
             
-        success, token, username = auth_db.login_or_register_google_user(email, name)
+        success, token, username, role = auth_db.login_or_register_google_user(email, name)
         if not success:
             raise HTTPException(status_code=500, detail=token)
             
-        return {"token": token, "username": username}
+        return {"token": token, "username": username, "role": role}
     except ValueError as e:
         raise HTTPException(status_code=401, detail=f"Invalid Google token: {str(e)}")
     except urllib_error.HTTPError as e:
@@ -251,11 +275,22 @@ class LoginRequest(BaseModel):
 @app.post("/auth/login")
 async def login(req: LoginRequest, request: Request):
     _enforce_auth_rate_limit(request, "login")
-    success, token_or_err = auth_db.login_user(req.username, req.password)
+    success, token_or_err, role = auth_db.login_user(req.username, req.password)
     if not success:
         raise HTTPException(status_code=401, detail=token_or_err)
-    return {"token": token_or_err, "username": req.username}
+    return {"token": token_or_err, "username": req.username, "role": role}
 
+@app.get("/auth/me")
+async def get_auth_me(request: Request):
+    """Return current user info from session token."""
+    auth = request.headers.get("authorization", "")
+    token = auth.removeprefix("Bearer ").strip() if auth.lower().startswith("bearer ") else ""
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing session token")
+    user_info = auth_db.get_full_user_by_token(token)
+    if not user_info:
+        raise HTTPException(status_code=401, detail="Invalid session token")
+    return user_info
 class UserKeyRequest(BaseModel):
     rpm_limit: int = 60
     expires_in_days: int | None = None
@@ -468,6 +503,19 @@ async def admin_add_user_tokens(username: str, req: AddTokensRequest, request: R
     if not success:
         raise HTTPException(status_code=404, detail="User or key not found")
     return {"message": f"Added {req.amount} tokens"}
+
+class RoleRequest(BaseModel):
+    role: str  # "admin" or "user"
+
+@app.put("/admin/users/{username}/role")
+async def admin_set_user_role(username: str, req: RoleRequest, request: Request):
+    _require_admin_key(request)
+    if req.role not in ("admin", "user"):
+        raise HTTPException(status_code=400, detail="Role must be 'admin' or 'user'")
+    success = auth_db.set_user_role(username, req.role)
+    if not success:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"message": f"User role updated to {req.role}"}
 
 
 # --- status ------------------------------------------------------------------
@@ -709,8 +757,8 @@ async def openai_completions(req: Request):
             output_tokens = auth_db.estimate_tokens(output_text)
             auth_db.consume_tokens(client_key, input_tokens + output_tokens)
             latency = int((time.time() - start_time) * 1000)
-        auth_db.log_usage(client_key, model, input_tokens + output_tokens, True, latency)
-        auth_db.insert_request_log(client_key, str(uuid.uuid4()), model, 'POST', '/chat', True, input_tokens, output_tokens, latency)
+            auth_db.log_usage(client_key, model, input_tokens + output_tokens, True, latency)
+            auth_db.insert_request_log(client_key, str(uuid.uuid4()), model, 'POST', '/chat', True, input_tokens, output_tokens, latency)
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 

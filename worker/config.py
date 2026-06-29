@@ -12,12 +12,17 @@ import os
 TARGET_URL = "https://use.ai"
 
 # ---- Local API auth ----------------------------------------------------------
-# Set env var ADMIN_KEY to protect the /admin/keys endpoints.
+# Set env var ADMIN_KEY to protect the /admin/keys endpoints (legacy fallback).
 # Client API keys are generated dynamically and stored in auth.db.
-# If ADMIN_KEY is empty, the admin endpoints are disabled.
+# If ADMIN_KEY is empty, the admin endpoints still work via role-based auth.
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "").strip()
 AUTH_DB_PATH = "bank/auth.db"
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+
+# Comma-separated list of email addresses that automatically get admin role
+# on registration/login. Example: admin@example.com,owner@gmail.com
+DEFAULT_ADMIN_EMAILS = [e.strip().lower() for e in os.environ.get("DEFAULT_ADMIN_EMAILS", "").split(",") if e.strip()]
+DEFAULT_TOKEN_LIMIT = max(1, int(os.environ.get("DEFAULT_TOKEN_LIMIT", "1000000")))  # 1M tokens
 
 _cors_origins_raw = os.environ.get(
     "CORS_ALLOW_ORIGINS",

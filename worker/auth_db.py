@@ -65,6 +65,11 @@ def _open() -> sqlite3.Connection:
         c.execute("ALTER TABLE api_keys ADD COLUMN token_last_reset REAL")
     except sqlite3.OperationalError:
         pass
+    # Role column for users
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'")
+    except sqlite3.OperationalError:
+        pass
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS rate_limits(
@@ -105,56 +110,81 @@ import bcrypt
 import secrets
 import time
 
-def register_user(username: str, password: str, email: str | None = None) -> tuple[bool, str]:
+def register_user(username: str, password: str, email: str | None = None) -> tuple[bool, str, str]:
+    """Register a user. Returns (success, token_or_error, role)."""
     with _lock:
         c = _open()
         try:
             if c.execute("SELECT 1 FROM users WHERE username=?", (username,)).fetchone():
-                return False, "Username already exists"
+                return False, "Username already exists", "user"
             
             pwd_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
             token = secrets.token_hex(32)
             now = time.time()
-            c.execute("INSERT INTO users(username, email, password_hash, session_token, created_at) VALUES(?,?,?,?,?)", 
-                      (username, email, pwd_hash, token, now))
+            
+            # Determine role from email
+            role = 'admin' if email and email.lower() in config.DEFAULT_ADMIN_EMAILS else 'user'
+            
+            c.execute("INSERT INTO users(username, email, password_hash, session_token, created_at, role) VALUES(?,?,?,?,?,?)", 
+                      (username, email, pwd_hash, token, now, role))
             c.commit()
 
-            return True, token
+            # Auto-create API key with default token limit
+            _auto_create_user_key(c, username, now)
+
+            return True, token, role
         finally:
             c.close()
 
-def login_user(username: str, password: str) -> tuple[bool, str]:
+def login_user(username: str, password: str) -> tuple[bool, str, str]:
+    """Login a user. Returns (success, token_or_error, role)."""
     with _lock:
         c = _open()
         try:
-            row = c.execute("SELECT password_hash FROM users WHERE username=?", (username,)).fetchone()
+            row = c.execute("SELECT password_hash, role FROM users WHERE username=?", (username,)).fetchone()
             if not row or not bcrypt.checkpw(password.encode('utf-8'), row["password_hash"].encode('utf-8')):
-                return False, "Invalid username or password"
+                return False, "Invalid username or password", "user"
             
             token = secrets.token_hex(32)
             c.execute("UPDATE users SET session_token=? WHERE username=?", (token, username))
+            
+            # Retroactively create API key if they don't have one
+            now = time.time()
+            if not c.execute("SELECT 1 FROM api_keys WHERE owner_username=?", (username,)).fetchone():
+                _auto_create_user_key(c, username, now)
+                
             c.commit()
-            return True, token
+            
+            role = row["role"] or "user"
+            return True, token, role
         finally:
             c.close()
 
-def login_or_register_google_user(email: str, name: str) -> tuple[bool, str, str]:
+def login_or_register_google_user(email: str, name: str) -> tuple[bool, str, str, str]:
+    """Login or register a Google user. Returns (success, token_or_error, username, role)."""
     with _lock:
         c = _open()
         try:
             # Check if user with this email exists
-            row = c.execute("SELECT username FROM users WHERE email=?", (email,)).fetchone()
+            row = c.execute("SELECT username, role FROM users WHERE email=?", (email,)).fetchone()
             
             username = ""
+            is_new_user = False
             if row:
                 username = row["username"]
+                now = time.time()
+                if not c.execute("SELECT 1 FROM api_keys WHERE owner_username=?", (username,)).fetchone():
+                    _auto_create_user_key(c, username, now)
             else:
                 # Fallback: check if they registered manually using their email as username
                 row2 = c.execute("SELECT username FROM users WHERE username=?", (email,)).fetchone()
                 if row2:
                     username = email
+                    now = time.time()
                     # Update their email field just in case
                     c.execute("UPDATE users SET email=? WHERE username=?", (email, username))
+                    if not c.execute("SELECT 1 FROM api_keys WHERE owner_username=?", (username,)).fetchone():
+                        _auto_create_user_key(c, username, now)
                 else:
                     # Register new user: base username is email before @
                     base_username = email.split('@')[0]
@@ -167,17 +197,30 @@ def login_or_register_google_user(email: str, name: str) -> tuple[bool, str, str
                         counter += 1
                         
                     now = time.time()
-                    c.execute("INSERT INTO users(username, email, password_hash, session_token, created_at) VALUES(?,?,?,?,?)", 
-                              (username, email, "", "", now))
+                    # Determine role from email
+                    role = 'admin' if email.lower() in config.DEFAULT_ADMIN_EMAILS else 'user'
+                    c.execute("INSERT INTO users(username, email, password_hash, session_token, created_at, role) VALUES(?,?,?,?,?,?)", 
+                              (username, email, "", "", now, role))
+                    
+                    # Auto-create API key with default token limit
+                    _auto_create_user_key(c, username, now)
+                    is_new_user = True
             
             # Generate new session token
             token = secrets.token_hex(32)
             c.execute("UPDATE users SET session_token=? WHERE username=?", (token, username))
             c.commit()
             
-            return True, token, username
+            # Get the user's role
+            if is_new_user:
+                role = 'admin' if email.lower() in config.DEFAULT_ADMIN_EMAILS else 'user'
+            else:
+                role_row = c.execute("SELECT role FROM users WHERE username=?", (username,)).fetchone()
+                role = (role_row["role"] or "user") if role_row else "user"
+            
+            return True, token, username, role
         except Exception as e:
-            return False, str(e), ""
+            return False, str(e), "", "user"
         finally:
             c.close()
 
@@ -190,13 +233,70 @@ def get_user_from_token(token: str) -> str | None:
         finally:
             c.close()
 
+
+def _auto_create_user_key(c: sqlite3.Connection, username: str, now: float) -> None:
+    """Auto-create an API key for a new user with default token limit.
+    Must be called within an existing lock+connection."""
+    key = "sk-" + secrets.token_hex(32)
+    token_limit = config.DEFAULT_TOKEN_LIMIT
+    c.execute("""
+        INSERT INTO api_keys(key, name, expires_at, rpm_limit, created_at, owner_username, allowed_models, token_limit, tokens_used, token_reset_period, token_last_reset)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, 0, 'weekly', ?)
+    """, (key, f"{username}'s Key", None, 60, now, username, None, token_limit, now))
+
+
+def get_user_role(username: str) -> str:
+    """Get the role for a user. Returns 'admin' or 'user'."""
+    with _lock:
+        c = _open()
+        try:
+            row = c.execute("SELECT role FROM users WHERE username=?", (username,)).fetchone()
+            return (row["role"] or "user") if row else "user"
+        finally:
+            c.close()
+
+
+def set_user_role(username: str, role: str) -> bool:
+    """Set the role for a user. Only 'admin' and 'user' are valid."""
+    if role not in ("admin", "user"):
+        return False
+    with _lock:
+        c = _open()
+        try:
+            existing = c.execute("SELECT 1 FROM users WHERE username=?", (username,)).fetchone()
+            if not existing:
+                return False
+            c.execute("UPDATE users SET role=? WHERE username=?", (role, username))
+            c.commit()
+            return True
+        finally:
+            c.close()
+
+
+def get_full_user_by_token(token: str) -> dict | None:
+    """Get full user info (username, email, role, created_at) from session token."""
+    with _lock:
+        c = _open()
+        try:
+            row = c.execute("SELECT username, email, role, created_at FROM users WHERE session_token=?", (token,)).fetchone()
+            if not row:
+                return None
+            return {
+                "username": row["username"],
+                "email": row["email"],
+                "role": row["role"] or "user",
+                "created_at": row["created_at"],
+            }
+        finally:
+            c.close()
+
 def get_all_users() -> list[dict]:
     with _lock:
         c = _open()
         try:
             # Join with api_keys to get detailed usage
             rows = c.execute("""
-                SELECT u.username, u.email, u.created_at,
+                SELECT u.username, u.email, u.created_at, u.role,
                        k.key, k.rpm_limit, k.expires_at, k.allowed_models,
                        k.token_limit, k.tokens_used, k.token_reset_period, k.token_last_reset
                 FROM users u
@@ -297,9 +397,10 @@ def create_key(key: str, name: str | None = None, expires_at: float | None = Non
     with _lock:
         c = _open()
         try:
+            now = time.time()
             c.execute(
-                "INSERT INTO api_keys(key, name, expires_at, rpm_limit, created_at) VALUES(?,?,?,?,?)",
-                (key, name, expires_at, rpm_limit, time.time()),
+                "INSERT INTO api_keys(key, name, expires_at, rpm_limit, created_at, token_limit, tokens_used, token_reset_period, token_last_reset) VALUES(?,?,?,?,?,?,?,?,?)",
+                (key, name, expires_at, rpm_limit, now, config.DEFAULT_TOKEN_LIMIT, 0, 'weekly', now),
             )
             c.commit()
             return get_key(key)
