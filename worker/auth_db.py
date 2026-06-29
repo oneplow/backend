@@ -129,8 +129,7 @@ def register_user(username: str, password: str, email: str | None = None) -> tup
                       (username, email, pwd_hash, token, now, role))
             c.commit()
 
-            # Auto-create API key with default token limit
-            _auto_create_user_key(c, username, now)
+
 
             return True, token, role
         finally:
@@ -148,11 +147,7 @@ def login_user(username: str, password: str) -> tuple[bool, str, str]:
             token = secrets.token_hex(32)
             c.execute("UPDATE users SET session_token=? WHERE username=?", (token, username))
             
-            # Retroactively create API key if they don't have one
-            now = time.time()
-            if not c.execute("SELECT 1 FROM api_keys WHERE owner_username=?", (username,)).fetchone():
-                _auto_create_user_key(c, username, now)
-                
+
             c.commit()
             
             role = row["role"] or "user"
@@ -172,19 +167,12 @@ def login_or_register_google_user(email: str, name: str) -> tuple[bool, str, str
             is_new_user = False
             if row:
                 username = row["username"]
-                now = time.time()
-                if not c.execute("SELECT 1 FROM api_keys WHERE owner_username=?", (username,)).fetchone():
-                    _auto_create_user_key(c, username, now)
             else:
                 # Fallback: check if they registered manually using their email as username
                 row2 = c.execute("SELECT username FROM users WHERE username=?", (email,)).fetchone()
                 if row2:
                     username = email
-                    now = time.time()
-                    # Update their email field just in case
                     c.execute("UPDATE users SET email=? WHERE username=?", (email, username))
-                    if not c.execute("SELECT 1 FROM api_keys WHERE owner_username=?", (username,)).fetchone():
-                        _auto_create_user_key(c, username, now)
                 else:
                     # Register new user: base username is email before @
                     base_username = email.split('@')[0]
@@ -201,9 +189,6 @@ def login_or_register_google_user(email: str, name: str) -> tuple[bool, str, str
                     role = 'admin' if email.lower() in config.DEFAULT_ADMIN_EMAILS else 'user'
                     c.execute("INSERT INTO users(username, email, password_hash, session_token, created_at, role) VALUES(?,?,?,?,?,?)", 
                               (username, email, "", "", now, role))
-                    
-                    # Auto-create API key with default token limit
-                    _auto_create_user_key(c, username, now)
                     is_new_user = True
             
             # Generate new session token
