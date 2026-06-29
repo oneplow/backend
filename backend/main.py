@@ -735,7 +735,18 @@ async def openai_completions(req: Request):
         msgs = inject_tools_and_results(msgs, tools)
 
     # Estimate input tokens
-    input_text = " ".join(m.get("content", "") for m in msgs if m.get("content"))
+    text_parts = []
+    for m in msgs:
+        content = m.get("content")
+        if not content:
+            continue
+        if isinstance(content, str):
+            text_parts.append(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text" and "text" in part:
+                    text_parts.append(part["text"])
+    input_text = " ".join(text_parts)
     input_tokens = auth_db.estimate_tokens(input_text)
 
     if stream:
