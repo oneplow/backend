@@ -166,7 +166,7 @@ def _get_dashboard_payload(req: Request) -> dict:
                 "user_count": None,
                 "token_info": auth_db.get_token_usage_by_username(username)
                 or {
-                    "token_limit": None,
+                    "token_limit": config.DEFAULT_TOKEN_LIMIT,
                     "tokens_used": 0,
                     "token_reset_period": "weekly",
                     "token_last_reset": None,
@@ -419,7 +419,11 @@ async def admin_reset_key_limit(key: str, req: Request):
 @app.get("/admin/users")
 async def admin_get_users(req: Request):
     _require_admin_key(req)
-    return {"users": auth_db.get_all_users()}
+    users = auth_db.get_all_users()
+    for u in users:
+        if u.get("key") is None and u.get("token_limit") is None:
+            u["token_limit"] = config.DEFAULT_TOKEN_LIMIT
+    return {"users": users}
 
 class AdminUpdateUserRequest(BaseModel):
     rpm_limit: int | None = None
