@@ -110,14 +110,24 @@ def _to_parts(messages: list) -> list:
     return out
 
 
-def _build_frame(chat_id, user_id, email, model, parts):
+def _build_frame(chat_id, acct, model, parts):
+    email = acct["email"]
     return {
-        "chatId": chat_id, "userId": user_id, "email": email,
+        "chatId": chat_id, "userId": acct["user_id"], "email": email,
         "userType": "regular", "userEmail": email, "planType": "free",
         "subscriptionStatus": "inactive", "isFreemium": False, "isTestUser": False,
         "selectedModel": config.MODEL_PREFIX + _model_slug(model), "locale": "en",
         "isWebSearchMode": False, "isDeepResearchMode": False,
-        "isImageGenerationMode": False, "agenticMode": False,
+        "isImageGenerationMode": False, "isStandaloneImageMode": False,
+        "agenticMode": False,
+        "cfModelsVariant": "OFF",
+        "experimentCohort": "C",
+        "deepResearchProcessor": "pro-fast",
+        "deviceId": acct.get("deviceId", str(uuid.uuid4())),
+        "mixpanelUserId": acct.get("mixpanelUserId", str(uuid.uuid4())),
+        "needsBlurPreview": False,
+        "userCountry": "Thailand (TH)",
+        "userTimezone": "Asia/Bangkok",
         "messages": parts,
         "trigger": "submit-message", "source": "chat_page",
     }
@@ -174,7 +184,7 @@ async def _stream_gen(acct: dict, model: str, parts: list):
 
     async with await _connect_ws() as ws:
         await ws.send(json.dumps(_build_frame(
-            chat_id, acct["user_id"], acct["email"], model, parts)))
+            chat_id, acct, model, parts)))
         while True:
             try:
                 raw = await asyncio.wait_for(ws.recv(), timeout=idle)

@@ -43,9 +43,11 @@ async def create_account(proxy: str | None = None) -> dict:
                 # Small delay between requests like a real browser
                 await asyncio.sleep(random.uniform(0.1, 0.4))
 
+                mixpanel_id = str(uuid.uuid4())
+                device_id = str(uuid.uuid4())
                 r2 = await c.post(f"{config.AUTH_BASE}/sign-in/credentials", json={
                     "email": email,
-                    "mixpanelUserId": str(uuid.uuid4()),
+                    "mixpanelUserId": mixpanel_id,
                     "guestId": str(uuid.uuid4()),
                     "mid": str(uuid.uuid4()),
                 })
@@ -72,7 +74,8 @@ async def create_account(proxy: str | None = None) -> dict:
             log.info("created account %s (userId=%s)", email, user_id[:8])
             return {"email": email, "user_id": user_id,
                     "cookie_header": cookie_header, "token": token,
-                    "ua": fp["ua"], "headers": fp["headers"]}
+                    "ua": fp["ua"], "headers": fp["headers"],
+                    "mixpanelUserId": mixpanel_id, "deviceId": device_id}
 
         except Exception as e:
             last_err = e
@@ -105,9 +108,11 @@ async def _create_account_direct() -> dict:
         r1.raise_for_status()
         await asyncio.sleep(random.uniform(0.1, 0.4))
 
+        mixpanel_id = str(uuid.uuid4())
+        device_id = str(uuid.uuid4())
         r2 = await c.post(f"{config.AUTH_BASE}/sign-in/credentials", json={
             "email": email,
-            "mixpanelUserId": str(uuid.uuid4()),
+            "mixpanelUserId": mixpanel_id,
             "guestId": str(uuid.uuid4()),
             "mid": str(uuid.uuid4()),
         })
@@ -126,4 +131,5 @@ async def _create_account_direct() -> dict:
     log.info("created account (direct) %s (userId=%s)", email, user_id[:8])
     return {"email": email, "user_id": user_id,
             "cookie_header": cookie_header, "token": token,
-            "ua": fp["ua"], "headers": fp["headers"]}
+            "ua": fp["ua"], "headers": fp["headers"],
+            "mixpanelUserId": mixpanel_id, "deviceId": device_id}
