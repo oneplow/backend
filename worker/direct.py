@@ -128,9 +128,11 @@ async def _stream_gen(acct: dict, model: str, parts: list):
     every frame), so a long code generation never trips a total-time cap -- it
     only ends on finish/stream-complete, a closed socket, or `idle`s of silence."""
     chat_id = str(uuid.uuid4())
+    import urllib.parse
+    encoded_email = urllib.parse.quote(acct['email'])
     uri = (f"{config.WS_AGENT_BASE}/{chat_id}"
            f"?userId={acct['user_id']}&userType=regular"
-           f"&userEmail={acct['email']}&planType=free&isTestUser=false")
+           f"&userEmail={encoded_email}&planType=free&isTestUser=false")
     hdrs = {
         "Cookie": acct["cookie_header"],
         "Origin": "https://use.ai",
