@@ -196,9 +196,28 @@ async def run_prompt(model: str, prompt: str) -> str:
         raise
 
 
+def _text_only(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        chunks = []
+        for item in content:
+            if isinstance(item, str):
+                chunks.append(item)
+            elif isinstance(item, dict) and item.get("type") == "text":
+                chunks.append(item.get("text", ""))
+        return "\n".join(chunks)
+    return ""
+
+
 def _flatten_messages(messages: list) -> str:
     """Collapse a role-tagged history into one prompt (browser fallback only)."""
-    msgs = [m for m in messages if (m.get("content") or "").strip()]
+    msgs = []
+    for m in messages:
+        text = _text_only(m.get("content")).strip()
+        if text:
+            msgs.append({"role": m.get("role"), "content": text})
+            
     if len(msgs) <= 1:
         return msgs[0]["content"] if msgs else ""
     lines = ["[Previous conversation]"]

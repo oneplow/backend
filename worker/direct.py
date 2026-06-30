@@ -35,26 +35,46 @@ def _model_slug(model: str) -> str:
     return config.resolve_model(model)
 
 
-def _content_text(content) -> str:
+def _extract_parts(content) -> list:
     if isinstance(content, str):
-        return content
+        if content.strip():
+            return [{"type": "text", "text": content.strip()}]
+        return []
+    
     if isinstance(content, list):
-        chunks = []
+        out_parts = []
         for item in content:
             if isinstance(item, str):
-                chunks.append(item)
+                if item.strip():
+                    out_parts.append({"type": "text", "text": item.strip()})
             elif isinstance(item, dict):
-                if isinstance(item.get("text"), str):
-                    chunks.append(item["text"])
-                elif isinstance(item.get("content"), str):
-                    chunks.append(item["content"])
-        return "\n".join(chunks)
+                t = item.get("type")
+                if t == "text":
+                    text_val = item.get("text") or item.get("content") or ""
+                    if text_val.strip():
+                        out_parts.append({"type": "text", "text": text_val.strip()})
+                elif t == "image_url":
+                    img_url = item.get("image_url", {})
+                    url = img_url.get("url") if isinstance(img_url, dict) else img_url if isinstance(img_url, str) else None
+                    if url:
+                        out_parts.append({"type": "image_url", "image_url": {"url": url}})
+                elif t == "image":
+                    if "image" in item:
+                        out_parts.append({"type": "image", "image": item["image"]})
+        return out_parts
+    
     if isinstance(content, dict):
-        if isinstance(content.get("text"), str):
-            return content["text"]
-        if isinstance(content.get("content"), str):
-            return content["content"]
-    return ""
+        t = content.get("type")
+        if t == "text" or not t:
+            text_val = content.get("text") or content.get("content") or ""
+            if text_val.strip():
+                return [{"type": "text", "text": text_val.strip()}]
+        elif t == "image_url":
+            img_url = content.get("image_url", {})
+            url = img_url.get("url") if isinstance(img_url, dict) else img_url if isinstance(img_url, str) else None
+            if url:
+                return [{"type": "image_url", "image_url": {"url": url}}]
+    return []
 
 
 def _to_parts(messages: list) -> list:
@@ -63,20 +83,25 @@ def _to_parts(messages: list) -> list:
     are merged to satisfy models that require alternating turns."""
     out = []
     for m in messages:
-        content = _content_text(m.get("content")).strip()
-        if not content:
+        parts = _extract_parts(m.get("content"))
+        if not parts:
             continue
+            
         role = m.get("role")
         if role not in ("user", "assistant"):
             role = "user"
             
         # Merge if same role as previous
         if out and out[-1]["role"] == role:
-            out[-1]["parts"][0]["text"] += "\n\n" + content
+            if out[-1]["parts"] and out[-1]["parts"][-1].get("type") == "text" and parts[0].get("type") == "text":
+                out[-1]["parts"][-1]["text"] += "\n\n" + parts[0]["text"]
+                out[-1]["parts"].extend(parts[1:])
+            else:
+                out[-1]["parts"].extend(parts)
         else:
             out.append({
                 "id": uuid.uuid4().hex[:16], "role": role,
-                "parts": [{"type": "text", "text": content}], "metadata": {}
+                "parts": parts, "metadata": {}
             })
             
     if not out:

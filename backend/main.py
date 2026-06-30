@@ -694,6 +694,7 @@ async def v1_chat(req: Request):
     reply = await run_guarded(lambda: run_messages(model, msgs))
     # Count tokens
     text_parts = []
+    image_count = 0
     for m in msgs:
         content = m.get("content")
         if not content:
@@ -702,10 +703,13 @@ async def v1_chat(req: Request):
             text_parts.append(content)
         elif isinstance(content, list):
             for part in content:
-                if isinstance(part, dict) and part.get("type") == "text" and "text" in part:
-                    text_parts.append(part["text"])
+                if isinstance(part, dict):
+                    if part.get("type") == "text" and "text" in part:
+                        text_parts.append(part["text"])
+                    elif part.get("type") in ("image_url", "image"):
+                        image_count += 1
     input_text = " ".join(text_parts)
-    input_tokens = auth_db.estimate_tokens(input_text)
+    input_tokens = auth_db.estimate_tokens(input_text) + (image_count * 85)
     output_tokens = auth_db.estimate_tokens(reply)
     auth_db.consume_tokens(client_key, input_tokens + output_tokens)
     latency = int((time.time() - start_time) * 1000)
@@ -747,6 +751,7 @@ async def openai_completions(req: Request):
 
     # Estimate input tokens
     text_parts = []
+    image_count = 0
     for m in msgs:
         content = m.get("content")
         if not content:
@@ -755,10 +760,13 @@ async def openai_completions(req: Request):
             text_parts.append(content)
         elif isinstance(content, list):
             for part in content:
-                if isinstance(part, dict) and part.get("type") == "text" and "text" in part:
-                    text_parts.append(part["text"])
+                if isinstance(part, dict):
+                    if part.get("type") == "text" and "text" in part:
+                        text_parts.append(part["text"])
+                    elif part.get("type") in ("image_url", "image"):
+                        image_count += 1
     input_text = " ".join(text_parts)
-    input_tokens = auth_db.estimate_tokens(input_text)
+    input_tokens = auth_db.estimate_tokens(input_text) + (image_count * 85)
 
     if stream:
         cid = "chatcmpl-" + uuid.uuid4().hex[:24]
