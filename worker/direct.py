@@ -177,8 +177,10 @@ async def _stream_gen(acct: dict, model: str, parts: list):
             try:
                 raw = await asyncio.wait_for(ws.recv(), timeout=idle)
             except asyncio.TimeoutError:
+                log.warning("WS TimeoutError waiting for frame")
                 break                                  # no token for `idle`s -> stop
-            except websockets.ConnectionClosed:
+            except websockets.ConnectionClosed as e:
+                log.warning("WS ConnectionClosed: code=%r reason=%r", e.code, e.reason)
                 break
             # Skip binary frames (proxy garbage)
             if isinstance(raw, bytes):
@@ -189,7 +191,8 @@ async def _stream_gen(acct: dict, model: str, parts: list):
                     continue
             try:
                 o = json.loads(raw)
-            except Exception:
+            except Exception as e:
+                log.warning("WS failed to parse JSON, raw=%r, err=%r", raw, e)
                 continue
             if o.get("type") == "rate-limit-error":
                 raise RuntimeError("rate-limit-error: " +
